@@ -41,7 +41,9 @@ If the agent asked a clarifying question or needs a decision:
     "That's outside the scope of the goal. Focus on: [restate the specific missing piece of the goal]."
   DO NOT answer: passwords, credentials, secrets, anything requiring real user knowledge.
 
-Your steer message speaks AS the user. Make it clear, direct, and actionable (1–3 sentences).
+Your steer message will be delivered with a visible [Supervisor] label.
+Do NOT include the [Supervisor] label yourself — the system adds it for you.
+Speak as the supervisor giving direct guidance to the agent. Make it clear, direct, and actionable (1–3 sentences).
 Do not ask the agent to verify its own work — tell it what to do next.
 
 ═══ WHEN THE AGENT IS ACTIVELY WORKING (mid-turn) ═══
@@ -202,6 +204,11 @@ ${conversationText}
 
 PREVIOUS INTERVENTIONS BY YOU:
 ${interventionHistory}
+
+DELIVERY FORMAT:
+- If you return action="steer", your message will be injected into the chat with a [Supervisor] label.
+- Do not include the [Supervisor] label yourself.
+- Write the message for the agent, not for the human.
 
 REMINDER — DESIRED OUTCOME:
 ${state.outcome}

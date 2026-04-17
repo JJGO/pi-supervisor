@@ -50,6 +50,7 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 | `/supervise model` | Open the interactive model picker |
 | `/supervise model <provider/modelId>` | Set supervisor model directly |
 | `/supervise sensitivity <low\|medium\|high>` | Adjust steering aggressiveness |
+| `/supervisor-tool` | Toggle the `start_supervision` tool for the current session |
 
 ### Examples
 
@@ -65,7 +66,9 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 /supervise stop
 ```
 
-The agent can also initiate supervision itself by calling the `start_supervision` tool — useful when it recognises a task needs goal tracking. Once active, supervision is locked: only the user can change or stop it.
+Running `/supervise <outcome>` now adds a visible disclosure message to the chat so the agent knows supervision is active. Supervisor steering messages are also labeled with a `[Supervisor]` prefix in-context and rendered in the UI as a distinct boxed message.
+
+The agent can also initiate supervision itself by calling the `start_supervision` tool, but that tool is **disabled by default**. Use `/supervisor-tool` to toggle it for the current session. Once supervision is active, it is locked: only the user can change or stop it.
 
 ## UI
 
@@ -94,7 +97,7 @@ Navigate with arrow keys, Escape to close. Changes are applied on close.
   The agent has added the DI container but hasn't updated the existing call sites yet…
 ```
 
-The second line shows the supervisor's reasoning as it streams. Toggle the widget with `/supervise widget`.
+The second line shows the supervisor's reasoning as it streams. If you abort with `Esc`, the widget switches to a paused state and the supervisor stays quiet until your next human-authored message. Toggle the widget with `/supervise widget`.
 
 ## Sensitivity Levels
 
@@ -107,6 +110,8 @@ The second line shows the supervisor's reasoning as it streams. Toggle the widge
 **End-of-run** (`agent_end`): fires once per user prompt after the agent finishes and goes idle. The supervisor must decide `done`, `steer`, or `continue`.
 
 **Mid-run** (`turn_end`): fires after each LLM tool-call cycle while the agent is still working. Steering is injected immediately (interrupting the current run) only when confidence exceeds the threshold. The agent has at least 2 sub-turns to settle before mid-run checks begin.
+
+**Esc / interrupt behavior**: when you interrupt the model with `Esc`, supervision pauses until your next real message. This prevents the supervisor from immediately re-steering the aborted run and gives you a clean chance to take over.
 
 ## Supervisor Model
 
@@ -164,7 +169,8 @@ If the agent asked a clarifying question or needs a decision:
     "That's outside the scope of the goal. Focus on: [restate the specific missing piece]."
   DO NOT answer: passwords, credentials, secrets, anything requiring real user knowledge.
 
-Your steer message speaks AS the user. Make it clear, direct, and actionable (1–3 sentences).
+Your steer message will be delivered with a visible [Supervisor] label.
+Speak as the supervisor giving direct guidance to the agent. Make it clear, direct, and actionable (1–3 sentences).
 Do not ask the agent to verify its own work — tell it what to do next.
 
 ═══ WHEN THE AGENT IS ACTIVELY WORKING (mid-turn) ═══
@@ -215,13 +221,13 @@ Response schema (strict JSON, required):
 
 ## Session Persistence
 
-Supervision state (outcome, model, sensitivity, intervention history) is stored in the pi session file and restored automatically on restart, session switch, fork, and tree navigation.
+Supervision state (outcome, model, sensitivity, intervention history, pause state, and `/supervisor-tool` toggle) is stored in the pi session file and restored automatically on restart, session switch, fork, and tree navigation.
 
 ## Project Structure
 
 ```
 src/
-  index.ts              # Extension entry point, event wiring, /supervise command, start_supervision tool
+  index.ts              # Extension entry point, event wiring, /supervise + /supervisor-tool commands
   types.ts              # SupervisorState, SteeringDecision, ConversationMessage
   state.ts              # SupervisorStateManager — in-memory state + session persistence
   engine.ts             # Snapshot building, SUPERVISOR.md loading, prompt construction, analyze()
@@ -231,6 +237,7 @@ src/
     status-widget.ts    # 🎯 footer badge + one-line widget with live thinking stream
     model-picker.ts     # Interactive model picker using pi's ModelSelectorComponent
     settings-panel.ts   # Interactive settings overlay using pi-tui's SettingsList
+    message-renderer.ts # Boxed chat rendering for supervisor activation + replies
 ```
 
 ## License

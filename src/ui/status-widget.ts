@@ -16,7 +16,7 @@ const WIDGET_ID = "supervisor";
 const STATUS_ID = "supervisor";
 
 const MAX_OUTCOME_DISPLAY = 48;
-const MAX_STEER_DISPLAY   = 50;
+const MAX_STEER_DISPLAY = 50;
 const MAX_THINKING_DISPLAY = 80;
 
 let _widgetVisible = true;
@@ -33,6 +33,7 @@ export function isWidgetVisible(): boolean {
 
 export type WidgetAction =
   | { type: "watching" }
+  | { type: "paused" }
   | { type: "analyzing"; turn: number; thinking?: string }
   | { type: "steering"; message: string }
   | { type: "done" };
@@ -67,33 +68,33 @@ export function updateUI(
     outcome: state.outcome,
     modelId: state.modelId,
     interventions: [...state.interventions],
+    pausedUntilHuman: state.pausedUntilHuman,
   };
-  const snapAction = action;
+  const snapAction = snap.pausedUntilHuman && action.type === "watching" ? { type: "paused" as const } : action;
 
   ctx.ui.setWidget(WIDGET_ID, (_tui, theme) => {
     const steerCount = snap.interventions.length;
 
-    // Header: ◉ Supervising
     const header = `${theme.fg("accent", "◉")} ${theme.fg("accent", "Supervising")}`;
-    // Goal label + value
     const goalLabel = theme.fg("dim", "Goal:");
-    const goalText  = theme.fg("muted", `"${truncate(snap.outcome, MAX_OUTCOME_DISPLAY)}"`);
-    const goal      = `${goalLabel} ${goalText}`;
-    // Model
-    const model  = theme.fg("dim", snap.modelId);
-    // Steer count
+    const goalText = theme.fg("muted", `"${truncate(snap.outcome, MAX_OUTCOME_DISPLAY)}"`);
+    const goal = `${goalLabel} ${goalText}`;
+    const model = theme.fg("dim", snap.modelId);
     const steers = steerCount > 0 ? theme.fg("dim", `↗ ${steerCount}`) : "";
 
-    // Current action
     let actionStr: string;
     let thinking = "";
     switch (snapAction.type) {
       case "watching":
         actionStr = theme.fg("dim", "watching");
         break;
+      case "paused":
+        actionStr = theme.fg("warning", "⏸ paused");
+        thinking = "waiting for the next human message";
+        break;
       case "analyzing":
         actionStr = theme.fg("warning", `⟳ turn ${snapAction.turn}`);
-        thinking  = snapAction.thinking ?? "";
+        thinking = snapAction.thinking ?? "";
         break;
       case "steering":
         actionStr = theme.fg("warning", `↗ "${truncate(snapAction.message, MAX_STEER_DISPLAY)}"`);
@@ -103,9 +104,9 @@ export function updateUI(
         break;
     }
 
-    const sep   = theme.fg("dim", " · ");
+    const sep = theme.fg("dim", " · ");
     const parts = [header, goal, model, steers, actionStr].filter(Boolean);
-    const line  = parts.join(sep);
+    const line = parts.join(sep);
 
     const thinkingLine = thinking
       ? theme.fg("dim", `  ${truncate(thinking, MAX_THINKING_DISPLAY)}`)
