@@ -4,7 +4,8 @@
 
 export type Sensitivity = "low" | "medium" | "high";
 export type SupervisorAction = "continue" | "steer" | "done";
-export type SupervisorMessageKind = "activation" | "reply";
+export type SupervisorMessageKind = "activation" | "capability" | "reply";
+export type SupervisorPauseMode = "none" | "through_next_human_turn";
 
 /** A single intervention record */
 export interface SupervisorIntervention {
@@ -24,12 +25,13 @@ export interface SupervisorState {
   interventions: SupervisorIntervention[];
   startedAt: number;
   turnCount: number;
-  pausedUntilHuman: boolean;
+  pauseMode: SupervisorPauseMode;
 }
 
 /** Session-local config that should survive reloads and session navigation */
 export interface SupervisorSessionConfig {
   toolEnabled: boolean;
+  toolDisclosureSent: boolean;
 }
 
 /** Decision returned by the supervisor LLM */
@@ -42,7 +44,7 @@ export interface SteeringDecision {
 
 /** A simplified message for building the supervisor context */
 export interface ConversationMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool" | "custom";
   content: string;
 }
 

@@ -25,6 +25,7 @@ import { pickModel } from "./ui/model-picker.js";
 import { openSettings } from "./ui/settings-panel.js";
 import {
   createSupervisorActivationMessage,
+  createSupervisorCapabilityMessage,
   createSupervisorReplyMessage,
   registerSupervisorMessageRenderer,
 } from "./ui/message-renderer.js";
@@ -32,6 +33,7 @@ import { updateUI, toggleWidget, isWidgetVisible } from "./ui/status-widget.js";
 import { loadWorkspaceModel, saveWorkspaceModel } from "./workspace-config.js";
 
 const START_SUPERVISION_TOOL_NAME = "start_supervision";
+const SUPERVISOR_CONTEXT_MESSAGE_TYPE = "supervisor-context";
 
 /**
  * Extract partial reasoning text from the supervisor's streaming JSON response.
@@ -72,6 +74,48 @@ export default function (pi: ExtensionAPI) {
 
   let idleSteers = 0; // consecutive agent_end steers; reset on done/stop/new supervision
   let startSupervisionToolRegistered = false;
+  let analysisGeneration = 0;
+  let midRunAnalysisController: AbortController | undefined;
+  let idleAnalysisController: AbortController | undefined;
+
+  const abortController = (controller: AbortController | undefined) => {
+    if (controller && !controller.signal.aborted) controller.abort();
+  };
+
+  const invalidateAnalyses = () => {
+    analysisGeneration++;
+    abortController(midRunAnalysisController);
+    abortController(idleAnalysisController);
+    midRunAnalysisController = undefined;
+    idleAnalysisController = undefined;
+  };
+
+  const beginAnalysis = (kind: "midRun" | "idle") => {
+    if (kind === "midRun") {
+      abortController(midRunAnalysisController);
+    } else {
+      abortController(idleAnalysisController);
+      abortController(midRunAnalysisController);
+      midRunAnalysisController = undefined;
+    }
+
+    const controller = new AbortController();
+    const generation = ++analysisGeneration;
+    if (kind === "midRun") {
+      midRunAnalysisController = controller;
+    } else {
+      idleAnalysisController = controller;
+    }
+    return { controller, generation };
+  };
+
+  const finishAnalysis = (kind: "midRun" | "idle", controller: AbortController) => {
+    if (kind === "midRun" && midRunAnalysisController === controller) midRunAnalysisController = undefined;
+    if (kind === "idle" && idleAnalysisController === controller) idleAnalysisController = undefined;
+  };
+
+  const canDeliverAnalysis = (generation: number): boolean =>
+    generation === analysisGeneration && state.isActive() && !state.isPaused();
 
   const ensureStartSupervisionToolRegistered = () => {
     if (startSupervisionToolRegistered) return;
@@ -80,33 +124,11 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       name: START_SUPERVISION_TOOL_NAME,
       label: "Start Supervision",
-      description:
-        "Activate the supervisor to track the conversation toward a specific outcome. " +
-        "The supervisor will observe every turn and steer the agent if it drifts. " +
-        "Once supervision is active it is locked — only the user can change or stop it.",
+      description: "Request supervisor support for a concrete outcome in this session.",
       parameters: Type.Object({
         outcome: Type.String({
-          description:
-            "The desired end-state to supervise toward. Be specific and measurable " +
-            "(e.g. 'Implement JWT auth with refresh tokens and full test coverage').",
+          description: "The desired end-state to supervise toward. Be specific and measurable.",
         }),
-        sensitivity: Type.Optional(
-          Type.Union(
-            [Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")],
-            {
-              description:
-                "How aggressively to steer. low = only when seriously off track, " +
-                "medium = on mild drift (default), high = proactively + mid-turn checks.",
-            }
-          )
-        ),
-        model: Type.Optional(
-          Type.String({
-            description:
-              "Supervisor model as 'provider/modelId' (e.g. 'anthropic/claude-haiku-4-5-20251001'). " +
-              "Defaults to workspace config, then the active chat model.",
-          })
-        ),
       }),
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const text = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], details: undefined });
@@ -120,21 +142,14 @@ export default function (pi: ExtensionAPI) {
           );
         }
 
-        const sensitivity: Sensitivity = params.sensitivity ?? DEFAULT_SENSITIVITY;
+        const existing = state.getState();
+        const sensitivity: Sensitivity = existing?.sensitivity ?? DEFAULT_SENSITIVITY;
+        const workspaceModel = loadWorkspaceModel(ctx.cwd);
+        const sessionModel = ctx.model;
+        const provider = existing?.provider ?? workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
+        const modelId = existing?.modelId ?? workspaceModel?.modelId ?? sessionModel?.id ?? DEFAULT_MODEL_ID;
 
-        let provider: string;
-        let modelId: string;
-        if (params.model) {
-          const slash = params.model.indexOf("/");
-          provider = slash === -1 ? DEFAULT_PROVIDER : params.model.slice(0, slash);
-          modelId = slash === -1 ? params.model : params.model.slice(slash + 1);
-        } else {
-          const workspaceModel = loadWorkspaceModel(ctx.cwd);
-          const sessionModel = ctx.model;
-          provider = workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
-          modelId = workspaceModel?.modelId ?? sessionModel?.id ?? DEFAULT_MODEL_ID;
-        }
-
+        invalidateAnalyses();
         state.start(params.outcome, provider, modelId, sensitivity);
         idleSteers = 0;
         updateUI(ctx, state.getState());
@@ -147,9 +162,7 @@ export default function (pi: ExtensionAPI) {
           "info"
         );
 
-        return text(
-          `Supervision active. Outcome: "${params.outcome}" | ${provider}/${modelId} | sensitivity: ${sensitivity}`
-        );
+        return text(`Supervision active. Outcome: "${params.outcome}"`);
       },
     });
   };
@@ -172,7 +185,39 @@ export default function (pi: ExtensionAPI) {
     await pi.sendMessage(createSupervisorReplyMessage(message), options);
   };
 
+  const buildSupervisorContextMessage = () => {
+    if (state.isPaused()) return undefined;
+
+    const s = state.getState();
+    if (s?.active) {
+      return {
+        customType: SUPERVISOR_CONTEXT_MESSAGE_TYPE,
+        content:
+          `[Supervisor context]\n` +
+          `Supervision is active for goal: "${s.outcome}". ` +
+          `You may receive concise [Supervisor] guidance if you drift from this goal.`,
+        display: false,
+      };
+    }
+
+    if (state.isToolEnabled()) {
+      return {
+        customType: SUPERVISOR_CONTEXT_MESSAGE_TYPE,
+        content: "[Supervisor context]\nSupervisor support is available in this session if needed.",
+        display: false,
+      };
+    }
+
+    return undefined;
+  };
+
+  const isSupervisorContextMessage = (message: unknown): boolean => {
+    const msg = message as any;
+    return msg?.role === "custom" && msg.customType === SUPERVISOR_CONTEXT_MESSAGE_TYPE;
+  };
+
   const onSessionLoad = (ctx: ExtensionContext) => {
+    invalidateAnalyses();
     state.loadFromSession(ctx);
     syncStartSupervisionToolActivation();
     updateUI(ctx, state.getState());
@@ -182,45 +227,72 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_switch", async (_event, ctx) => onSessionLoad(ctx));
   pi.on("session_fork", async (_event, ctx) => onSessionLoad(ctx));
   pi.on("session_tree", async (_event, ctx) => onSessionLoad(ctx));
+  pi.on("session_compact", async (_event, ctx) => onSessionLoad(ctx));
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return;
-    if (!state.isActive() || !state.isPausedUntilHuman()) return;
+    if (!state.isActive()) return;
 
-    state.setPausedUntilHuman(false);
-    updateUI(ctx, state.getState());
+    // Human takeover invalidates any idle decision that was analyzing the previous state.
+    invalidateAnalyses();
+    if (state.isPaused()) updateUI(ctx, state.getState());
+  });
+
+  pi.on("context", async (event) => {
+    const messages = event.messages.filter((message) => !isSupervisorContextMessage(message));
+    const contextMessage = buildSupervisorContextMessage();
+    if (!contextMessage) return { messages };
+
+    return {
+      messages: [
+        ...messages,
+        {
+          role: "custom" as const,
+          ...contextMessage,
+          timestamp: Date.now(),
+        },
+      ],
+    };
   });
 
   // turn_end fires after each LLM sub-turn (tool-call cycle) while the agent is still running.
   // low:    no mid-run checks at all
-  // medium: check every 3rd tool cycle (turns 2, 5, 8, …), confidence >= 0.9
-  // high:   check every tool cycle from turn 2, confidence >= 0.85
+  // medium: conservative mid-run checks every 4th tool cycle after the agent has had time to settle
+  // high:   check every tool cycle from turn 3, confidence >= 0.9
   pi.on("turn_end", async (event, ctx) => {
-    if (!state.isActive()) return;
+    if (!state.isActive() || state.isPaused()) return;
     const s = state.getState()!;
 
-    if (s.pausedUntilHuman) return;
     if (s.sensitivity === "low") return;
-    if (event.turnIndex < 2) return;
-    if (s.sensitivity === "medium" && (event.turnIndex - 2) % 3 !== 0) return;
+    if (event.turnIndex < 3) return;
+    if (s.sensitivity === "medium" && (event.turnIndex - 3) % 4 !== 0) return;
 
+    const { controller, generation } = beginAnalysis("midRun");
     let decision;
     try {
-      decision = await analyze(ctx, s, false, false);
+      decision = await analyze(ctx, s, false, false, controller.signal);
     } catch {
       return;
+    } finally {
+      finishAnalysis("midRun", controller);
     }
 
-    const threshold = s.sensitivity === "medium" ? 0.9 : 0.85;
+    if (!canDeliverAnalysis(generation)) return;
+
+    const latestState = state.getState();
+    if (!latestState) return;
+
+    const threshold = latestState.sensitivity === "medium" ? 0.95 : 0.9;
     if (decision.action === "steer" && decision.message && decision.confidence >= threshold) {
       const supervisorMessage = normalizeSupervisorReply(decision.message);
       state.addIntervention({
-        turnCount: s.turnCount,
+        turnCount: latestState.turnCount,
         message: supervisorMessage,
         reasoning: decision.reasoning,
         timestamp: Date.now(),
       });
       updateUI(ctx, state.getState(), { type: "steering", message: supervisorMessage });
+      if (!canDeliverAnalysis(generation)) return;
       await sendSupervisorReply(supervisorMessage, { deliverAs: "steer" });
     }
   });
@@ -231,14 +303,18 @@ export default function (pi: ExtensionAPI) {
     if (!state.isActive()) return;
 
     if (wasRunAborted(event.messages)) {
-      state.setPausedUntilHuman(true);
+      invalidateAnalyses();
+      state.setPauseMode("through_next_human_turn");
       updateUI(ctx, state.getState());
       return;
     }
 
     const activeState = state.getState();
-    if (!activeState || activeState.pausedUntilHuman) {
-      updateUI(ctx, activeState);
+    if (!activeState) return;
+
+    if (activeState.pauseMode !== "none") {
+      state.setPauseMode("none");
+      updateUI(ctx, state.getState());
       return;
     }
 
@@ -248,10 +324,14 @@ export default function (pi: ExtensionAPI) {
 
     updateUI(ctx, s, { type: "analyzing", turn: s.turnCount });
 
-    const decision = await analyze(ctx, s, true, stagnating, undefined, (accumulated) => {
+    const { controller, generation } = beginAnalysis("idle");
+    const decision = await analyze(ctx, s, true, stagnating, controller.signal, (accumulated) => {
+      if (!canDeliverAnalysis(generation)) return;
       const thinking = extractThinking(accumulated);
       updateUI(ctx, state.getState()!, { type: "analyzing", turn: s.turnCount, thinking });
-    });
+    }).finally(() => finishAnalysis("idle", controller));
+
+    if (!canDeliverAnalysis(generation)) return;
 
     if (decision.action === "steer" && decision.message) {
       const supervisorMessage = normalizeSupervisorReply(decision.message);
@@ -263,6 +343,7 @@ export default function (pi: ExtensionAPI) {
         timestamp: Date.now(),
       });
       updateUI(ctx, state.getState(), { type: "steering", message: supervisorMessage });
+      if (!canDeliverAnalysis(generation)) return;
       await sendSupervisorReply(supervisorMessage, { triggerTurn: true });
     } else if (decision.action === "done") {
       idleSteers = 0;
@@ -270,6 +351,7 @@ export default function (pi: ExtensionAPI) {
       const suffix = stagnating ? ` (stopped after ${MAX_IDLE_STEERS} steering attempts — goal substantially achieved)` : "";
       ctx.ui.notify(`Supervisor: outcome achieved! "${s.outcome}"${suffix}`, "info");
       state.stop();
+      invalidateAnalyses();
       updateUI(ctx, state.getState());
     } else {
       updateUI(ctx, state.getState(), { type: "watching" });
@@ -287,6 +369,12 @@ export default function (pi: ExtensionAPI) {
       const enabled = !state.isToolEnabled();
       state.setToolEnabled(enabled);
       syncStartSupervisionToolActivation();
+
+      if (enabled && !state.isToolDisclosureSent()) {
+        await pi.sendMessage(createSupervisorCapabilityMessage(), { deliverAs: "followUp" });
+        state.setToolDisclosureSent(true);
+      }
+
       ctx.ui.notify(`Supervisor tool ${enabled ? "enabled" : "disabled"}.`, "info");
     },
   });
@@ -311,6 +399,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         state.stop();
+        invalidateAnalyses();
         idleSteers = 0;
         updateUI(ctx, state.getState());
         ctx.ui.notify("Supervisor stopped.", "info");
@@ -332,6 +421,7 @@ export default function (pi: ExtensionAPI) {
         if (result?.widget !== undefined && result.widget !== isWidgetVisible()) toggleWidget();
         if (result?.action === "stop" && state.isActive()) {
           state.stop();
+          invalidateAnalyses();
           idleSteers = 0;
         }
         updateUI(ctx, state.getState());
@@ -436,6 +526,7 @@ export default function (pi: ExtensionAPI) {
 
         if (result.action === "stop" && state.isActive()) {
           state.stop();
+          invalidateAnalyses();
           idleSteers = 0;
           ctx.ui.notify("Supervisor stopped.", "info");
         }
@@ -462,6 +553,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      invalidateAnalyses();
       state.start(trimmed, provider, modelId, sensitivity);
       idleSteers = 0;
       updateUI(ctx, state.getState());

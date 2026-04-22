@@ -44,7 +44,12 @@ export function registerSupervisorMessageRenderer(pi: ExtensionAPI): void {
     const details = message.details;
     const kind = details?.kind ?? "reply";
     const body = details?.body ?? stripSupervisorPrefix(extractText(message.content as string | { type: string; text?: string }[]));
-    const title = kind === "activation" ? "🤖 Supervisor active" : "🤖 Supervisor replied";
+    const title =
+      kind === "activation"
+        ? "🤖 Supervisor active"
+        : kind === "capability"
+          ? "🤖 Supervisor available"
+          : "🤖 Supervisor replied";
 
     const box = new Box(1, 1, withSupervisorBackground);
     box.addChild(new Text(`${theme.bold(withSupervisorText(title))}\n${withSupervisorText(body)}`, 0, 0));
@@ -60,6 +65,19 @@ export function createSupervisorActivationMessage(outcome: string) {
     display: true,
     details: {
       kind: "activation" as const,
+      body,
+    },
+  };
+}
+
+export function createSupervisorCapabilityMessage() {
+  const body = "Supervisor support is available in this session if needed.";
+  return {
+    customType: SUPERVISOR_MESSAGE_TYPE,
+    content: `${SUPERVISOR_PREFIX} ${body}`,
+    display: true,
+    details: {
+      kind: "capability" as const,
       body,
     },
   };

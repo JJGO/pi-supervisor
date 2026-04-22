@@ -68,9 +68,9 @@ export function updateUI(
     outcome: state.outcome,
     modelId: state.modelId,
     interventions: [...state.interventions],
-    pausedUntilHuman: state.pausedUntilHuman,
+    paused: state.pauseMode !== "none",
   };
-  const snapAction = snap.pausedUntilHuman && action.type === "watching" ? { type: "paused" as const } : action;
+  const snapAction = snap.paused && action.type === "watching" ? { type: "paused" as const } : action;
 
   ctx.ui.setWidget(WIDGET_ID, (_tui, theme) => {
     const steerCount = snap.interventions.length;

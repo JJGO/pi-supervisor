@@ -49,6 +49,8 @@ Do not ask the agent to verify its own work — tell it what to do next.
 ═══ WHEN THE AGENT IS ACTIVELY WORKING (mid-turn) ═══
 Only intervene if it is clearly heading in the wrong direction.
 Trust the agent to complete what it has started. Avoid interrupting productive work.
+Do NOT steer merely because the work is incomplete, partially implemented, or still being verified.
+If the agent is following a coherent plan, using tools productively, or making visible progress, return "continue".
 
 ═══ STEERING RULES ═══
 - Be specific: reference the outcome, missing pieces, or the question being answered.
@@ -122,8 +124,11 @@ function buildSnapshot(ctx: ExtensionContext, limit: number): ConversationMessag
       const content = extractText(msg.content);
       if (content) messages.push({ role: "user", content });
     } else if (msg.role === "assistant") {
-      const content = extractAssistantText(msg.content);
+      const content = extractAssistantText(msg.content, msg.stopReason);
       if (content) messages.push({ role: "assistant", content });
+    } else if (msg.role === "toolResult") {
+      const content = extractToolResultText(msg.content, msg.toolName, msg.isError);
+      if (content) messages.push({ role: "tool", content });
     }
   }
 
@@ -143,12 +148,30 @@ function extractText(content: unknown): string {
   return "";
 }
 
-function extractAssistantText(content: unknown): string {
+function extractAssistantText(content: unknown, stopReason?: string): string {
   if (!Array.isArray(content)) return "";
   const textParts = content
     .filter((b: any) => b.type === "text")
     .map((b: any) => b.text as string);
-  return textParts.join("\n").trim();
+  const toolCalls = content
+    .filter((b: any) => b.type === "toolCall")
+    .map((b: any) => {
+      const args = b.arguments && typeof b.arguments === "object" ? JSON.stringify(b.arguments) : "{}";
+      return `${b.name ?? "tool"}(${args})`;
+    });
+
+  const parts = [textParts.join("\n").trim(), toolCalls.length ? `Tool calls: ${toolCalls.join("; ")}` : ""]
+    .filter(Boolean);
+  if (stopReason && stopReason !== "stop") parts.push(`Stop reason: ${stopReason}`);
+  return parts.join("\n").trim();
+}
+
+function extractToolResultText(content: unknown, toolName?: string, isError?: boolean): string {
+  const text = extractText(content);
+  if (!text) return "";
+  const trimmed = text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+  const label = toolName ? `Tool result (${toolName}${isError ? ", error" : ""})` : `Tool result${isError ? " (error)" : ""}`;
+  return `${label}:\n${trimmed}`;
 }
 
 /** Build the user-facing prompt for the supervisor LLM. */
@@ -171,13 +194,13 @@ function buildUserPrompt(
     snapshot.length === 0
       ? "(No conversation yet)"
       : snapshot
-          .map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
+          .map((m) => `${m.role === "user" ? "USER" : m.role === "assistant" ? "ASSISTANT" : m.role === "tool" ? "TOOL" : "CUSTOM"}: ${m.content}`)
           .join("\n\n---\n\n");
 
   const agentStatus = agentIsIdle
     ? `AGENT STATUS: IDLE — the agent has finished its turn and is now waiting for user input.
 You MUST return "done" or "steer". Returning "continue" here means the agent stays idle forever.`
-    : `AGENT STATUS: WORKING — the agent is actively processing. Only intervene if clearly off track.`;
+    : `AGENT STATUS: WORKING — the agent is actively processing. Only intervene if clearly off track. If tool results show coherent progress, return "continue".`;
 
   const stagnationWarning = stagnating
     ? `\n⚠ STAGNATION: The supervisor has sent ${state.interventions.length} steering messages with no "done" verdict.

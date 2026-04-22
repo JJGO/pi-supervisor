@@ -66,9 +66,9 @@ pi -e ~/projects/pi-supervisor/src/index.ts
 /supervise stop
 ```
 
-Running `/supervise <outcome>` now adds a visible disclosure message to the chat so the agent knows supervision is active. Supervisor steering messages are also labeled with a `[Supervisor]` prefix in-context and rendered in the UI as a distinct boxed message.
+Running `/supervise <outcome>` adds a visible disclosure message to the chat and a hidden turn-time context reminder so the agent continues to know supervision is active even after compaction. Supervisor steering messages are labeled with a `[Supervisor]` prefix in-context and rendered in the UI as a distinct boxed message.
 
-The agent can also initiate supervision itself by calling the `start_supervision` tool, but that tool is **disabled by default**. Use `/supervisor-tool` to toggle it for the current session. Once supervision is active, it is locked: only the user can change or stop it.
+The agent can also initiate supervision itself by calling the `start_supervision` tool, but that tool is **disabled by default**. Use `/supervisor-tool` to toggle it for the current session. When enabled, the agent receives only a minimal capability disclosure; model, sensitivity, and detailed policy remain user-controlled.
 
 ## UI
 
@@ -97,21 +97,21 @@ Navigate with arrow keys, Escape to close. Changes are applied on close.
   The agent has added the DI container but hasn't updated the existing call sites yet…
 ```
 
-The second line shows the supervisor's reasoning as it streams. If you abort with `Esc`, the widget switches to a paused state and the supervisor stays quiet until your next human-authored message. Toggle the widget with `/supervise widget`.
+The second line shows the supervisor's reasoning as it streams. If you abort with `Esc`, the widget switches to a paused state and the supervisor stays quiet for the full next human-authored turn. Toggle the widget with `/supervise widget`.
 
 ## Sensitivity Levels
 
 | Level | When it checks | Confidence threshold | Steering style |
 |---|---|---|---|
 | `low` | End of each run only | — | Only if seriously off track |
-| `medium` (default) | End of run + every 3rd tool cycle mid-run | ≥ 0.90 | On clear drift |
-| `high` | End of run + every tool cycle mid-run | ≥ 0.85 | Proactively |
+| `medium` (default) | End of run + conservative mid-run checks every 4th tool cycle after settling | ≥ 0.95 | On clear drift |
+| `high` | End of run + every tool cycle after settling | ≥ 0.90 | Proactively, but still avoids interrupting productive work |
 
 **End-of-run** (`agent_end`): fires once per user prompt after the agent finishes and goes idle. The supervisor must decide `done`, `steer`, or `continue`.
 
-**Mid-run** (`turn_end`): fires after each LLM tool-call cycle while the agent is still working. Steering is injected immediately (interrupting the current run) only when confidence exceeds the threshold. The agent has at least 2 sub-turns to settle before mid-run checks begin.
+**Mid-run** (`turn_end`): fires after LLM tool-call cycles while the agent is still working. Steering is injected immediately (interrupting the current run) only when confidence exceeds the threshold. The agent has at least 3 sub-turns to settle before mid-run checks begin, and tool results are included in the supervisor snapshot so productive work is less likely to be interrupted.
 
-**Esc / interrupt behavior**: when you interrupt the model with `Esc`, supervision pauses until your next real message. This prevents the supervisor from immediately re-steering the aborted run and gives you a clean chance to take over.
+**Esc / interrupt behavior**: when you interrupt the model with `Esc`, supervision pauses through the full next human-authored turn. In-flight supervisor analysis is cancelled and stale decisions are dropped, giving you a clean chance to take over.
 
 ## Supervisor Model
 
@@ -176,6 +176,8 @@ Do not ask the agent to verify its own work — tell it what to do next.
 ═══ WHEN THE AGENT IS ACTIVELY WORKING (mid-turn) ═══
 Only intervene if it is clearly heading in the wrong direction.
 Trust the agent to complete what it has started. Avoid interrupting productive work.
+Do NOT steer merely because the work is incomplete, partially implemented, or still being verified.
+If the agent is following a coherent plan, using tools productively, or making visible progress, return "continue".
 
 ═══ STEERING RULES ═══
 - Be specific: reference the outcome, missing pieces, or the question being answered.
@@ -221,7 +223,7 @@ Response schema (strict JSON, required):
 
 ## Session Persistence
 
-Supervision state (outcome, model, sensitivity, intervention history, pause state, and `/supervisor-tool` toggle) is stored in the pi session file and restored automatically on restart, session switch, fork, and tree navigation.
+Supervision state (outcome, model, sensitivity, intervention history, pause state, `/supervisor-tool` toggle, and capability disclosure state) is stored in the pi session file and restored automatically on restart, session switch, fork, tree navigation, and compaction. Active supervision is also reintroduced as hidden turn-time context so compaction does not make the agent forget it.
 
 ## Project Structure
 

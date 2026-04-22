@@ -8,6 +8,7 @@ import type {
   SupervisorIntervention,
   Sensitivity,
   SupervisorSessionConfig,
+  SupervisorPauseMode,
 } from "./types.js";
 
 const STATE_ENTRY_TYPE = "supervisor-state";
@@ -19,6 +20,7 @@ export const DEFAULT_SENSITIVITY: Sensitivity = "medium";
 
 const DEFAULT_CONFIG: SupervisorSessionConfig = {
   toolEnabled: false,
+  toolDisclosureSent: false,
 };
 
 export class SupervisorStateManager {
@@ -40,7 +42,7 @@ export class SupervisorStateManager {
       interventions: [],
       startedAt: Date.now(),
       turnCount: 0,
-      pausedUntilHuman: false,
+      pauseMode: "none",
     };
     this.persistState();
   }
@@ -48,7 +50,7 @@ export class SupervisorStateManager {
   stop(): void {
     if (!this.state) return;
     this.state.active = false;
-    this.state.pausedUntilHuman = false;
+    this.state.pauseMode = "none";
     this.persistState();
   }
 
@@ -85,23 +87,32 @@ export class SupervisorStateManager {
     this.persistState();
   }
 
-  setPausedUntilHuman(pausedUntilHuman: boolean): void {
+  setPauseMode(pauseMode: SupervisorPauseMode): void {
     if (!this.state) return;
-    this.state.pausedUntilHuman = pausedUntilHuman;
+    this.state.pauseMode = pauseMode;
     this.persistState();
   }
 
-  isPausedUntilHuman(): boolean {
-    return this.state?.pausedUntilHuman === true;
+  isPaused(): boolean {
+    return this.state?.pauseMode !== undefined && this.state.pauseMode !== "none";
   }
 
   setToolEnabled(toolEnabled: boolean): void {
-    this.config = { toolEnabled };
+    this.config = { ...this.config, toolEnabled };
     this.persistConfig();
   }
 
   isToolEnabled(): boolean {
     return this.config.toolEnabled === true;
+  }
+
+  setToolDisclosureSent(toolDisclosureSent: boolean): void {
+    this.config = { ...this.config, toolDisclosureSent };
+    this.persistConfig();
+  }
+
+  isToolDisclosureSent(): boolean {
+    return this.config.toolDisclosureSent === true;
   }
 
   /** Restore state from session entries (finds the most recent config + supervisor-state entries). */
@@ -135,7 +146,7 @@ export class SupervisorStateManager {
   private normalizeState(data: unknown): SupervisorState | null {
     if (!data || typeof data !== "object") return null;
 
-    const state = data as Partial<SupervisorState>;
+    const state = data as Partial<SupervisorState> & { pausedUntilHuman?: boolean };
     if (
       typeof state.outcome !== "string" ||
       typeof state.provider !== "string" ||
@@ -148,6 +159,11 @@ export class SupervisorStateManager {
       return null;
     }
 
+    const pauseMode: SupervisorPauseMode =
+      state.pauseMode === "through_next_human_turn" || state.pausedUntilHuman === true
+        ? "through_next_human_turn"
+        : "none";
+
     return {
       active: state.active === true,
       outcome: state.outcome,
@@ -157,7 +173,7 @@ export class SupervisorStateManager {
       interventions: state.interventions as SupervisorIntervention[],
       startedAt: state.startedAt,
       turnCount: state.turnCount,
-      pausedUntilHuman: state.pausedUntilHuman === true,
+      pauseMode,
     };
   }
 
@@ -166,6 +182,7 @@ export class SupervisorStateManager {
     const config = data as Partial<SupervisorSessionConfig>;
     return {
       toolEnabled: config.toolEnabled === true,
+      toolDisclosureSent: config.toolDisclosureSent === true,
     };
   }
 
