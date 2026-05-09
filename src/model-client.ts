@@ -8,9 +8,11 @@
 import {
   createAgentSession,
   DefaultResourceLoader,
+  getAgentDir,
   SessionManager,
-} from "@mariozechner/pi-coding-agent";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SteeringDecision } from "./types.js";
 
 /**
@@ -29,7 +31,12 @@ export async function callModel(
   const model = ctx.modelRegistry.find(provider, modelId);
   if (!model) return null;
 
+  const agentDir = getAgentDir();
+  const settingsManager = SettingsManager.create(ctx.cwd, agentDir);
   const loader = new DefaultResourceLoader({
+    cwd: ctx.cwd,
+    agentDir,
+    settingsManager,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,

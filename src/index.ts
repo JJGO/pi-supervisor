@@ -11,8 +11,8 @@
  *   /supervisor-tool              — toggle the start_supervision tool for this session
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { analyze, loadSystemPrompt } from "./engine.js";
 import {
   SupervisorStateManager,
@@ -224,8 +224,6 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async (_event, ctx) => onSessionLoad(ctx));
-  pi.on("session_switch", async (_event, ctx) => onSessionLoad(ctx));
-  pi.on("session_fork", async (_event, ctx) => onSessionLoad(ctx));
   pi.on("session_tree", async (_event, ctx) => onSessionLoad(ctx));
   pi.on("session_compact", async (_event, ctx) => onSessionLoad(ctx));
 

@@ -6,8 +6,8 @@
  * and replace it with a clearer visual treatment for humans.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Box, Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import type { SupervisorChatMessageDetails } from "../types.js";
 
 export const SUPERVISOR_MESSAGE_TYPE = "supervisor-message";
